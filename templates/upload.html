@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>goserve — upload</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #0e0e10;
+    color: #d4d4d8;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: #a1a1aa;
+    margin-bottom: 1.5rem;
+    letter-spacing: 0.04em;
+  }
+  h1 span { color: #22d3ee; }
+
+  .drop-zone {
+    width: 100%;
+    max-width: 480px;
+    border: 2px dashed #3f3f46;
+    border-radius: 12px;
+    padding: 3rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: #22d3ee;
+    background: rgba(34, 211, 238, 0.04);
+  }
+
+  .drop-zone p { font-size: 0.95rem; color: #71717a; margin-bottom: 1rem; }
+  .drop-zone .hint { font-size: 0.8rem; color: #52525b; }
+
+  .browse-btn {
+    display: inline-block;
+    padding: 0.5rem 1.2rem;
+    background: #22d3ee;
+    color: #0e0e10;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .browse-btn:hover { background: #67e8f9; }
+
+  input[type="file"] { display: none; }
+
+  #file-list {
+    width: 100%;
+    max-width: 480px;
+    margin-top: 1rem;
+  }
+  .file-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    background: #18181b;
+    border-radius: 6px;
+    margin-bottom: 0.4rem;
+    font-size: 0.82rem;
+  }
+  .file-item .name { color: #d4d4d8; word-break: break-all; flex: 1; }
+  .file-item .size { color: #52525b; margin-left: 1rem; white-space: nowrap; }
+  .file-item .remove {
+    color: #71717a;
+    margin-left: 0.75rem;
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+  }
+  .file-item .remove:hover { color: #ef4444; }
+
+  #upload-btn {
+    display: none;
+    margin-top: 1rem;
+    padding: 0.6rem 2rem;
+    background: #22d3ee;
+    color: #0e0e10;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  #upload-btn:hover { background: #67e8f9; }
+  #upload-btn:disabled { background: #3f3f46; color: #71717a; cursor: not-allowed; }
+
+  #progress-bar {
+    display: none;
+    width: 100%;
+    max-width: 480px;
+    height: 4px;
+    background: #27272a;
+    border-radius: 2px;
+    margin-top: 1rem;
+    overflow: hidden;
+  }
+  #progress-bar .fill {
+    height: 100%;
+    width: 0%;
+    background: #22d3ee;
+    transition: width 0.15s;
+    border-radius: 2px;
+  }
+
+  #status {
+    margin-top: 1rem;
+    font-size: 0.82rem;
+    color: #a1a1aa;
+    white-space: pre-line;
+    max-width: 480px;
+    width: 100%;
+  }
+  #status.error { color: #f87171; }
+  #status.ok { color: #4ade80; }
+
+  .back-link {
+    margin-top: 2rem;
+    font-size: 0.8rem;
+    color: #52525b;
+  }
+  .back-link a { color: #22d3ee; text-decoration: none; }
+  .back-link a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<h1><span>goserve</span> — upload</h1>
+
+<div class="drop-zone" id="drop-zone">
+  <p>Drag &amp; drop files here</p>
+  <button class="browse-btn" id="browse-btn">Browse files</button>
+  <input type="file" id="file-input" multiple>
+  <p class="hint">Multi-file supported · 2 GB max</p>
+</div>
+
+<div id="file-list"></div>
+<button id="upload-btn">Upload</button>
+<div id="progress-bar"><div class="fill" id="progress-fill"></div></div>
+<div id="status"></div>
+<p class="back-link"><a href="/">← back to file listing</a></p>
+
+<script>
+(function() {
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('file-input');
+  const browseBtn = document.getElementById('browse-btn');
+  const fileList = document.getElementById('file-list');
+  const uploadBtn = document.getElementById('upload-btn');
+  const progressBar = document.getElementById('progress-bar');
+  const progressFill = document.getElementById('progress-fill');
+  const status = document.getElementById('status');
+
+  let pendingFiles = [];
+
+  browseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fileInput.click();
+  });
+  dropZone.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', () => {
+    addFiles(fileInput.files);
+    fileInput.value = '';
+  });
+
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+  });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    addFiles(e.dataTransfer.files);
+  });
+
+  function addFiles(fileListObj) {
+    for (const f of fileListObj) {
+      if (!pendingFiles.some(p => p.name === f.name && p.size === f.size)) {
+        pendingFiles.push(f);
+      }
+    }
+    renderList();
+  }
+
+  function renderList() {
+    fileList.innerHTML = '';
+    pendingFiles.forEach((f, i) => {
+      const div = document.createElement('div');
+      div.className = 'file-item';
+      div.innerHTML = `
+        <span class="name">${esc(f.name)}</span>
+        <span class="size">${humanSize(f.size)}</span>
+        <span class="remove" data-idx="${i}">&times;</span>
+      `;
+      fileList.appendChild(div);
+    });
+    uploadBtn.style.display = pendingFiles.length ? 'inline-block' : 'none';
+    status.textContent = '';
+    status.className = 'status';
+  }
+
+  fileList.addEventListener('click', (e) => {
+    if (e.target.classList.contains('remove')) {
+      pendingFiles.splice(+e.target.dataset.idx, 1);
+      renderList();
+    }
+  });
+
+  uploadBtn.addEventListener('click', () => {
+    if (!pendingFiles.length) return;
+    const fd = new FormData();
+    pendingFiles.forEach(f => fd.append('files', f));
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/upload');
+
+    uploadBtn.disabled = true;
+    progressBar.style.display = 'block';
+    progressFill.style.width = '0%';
+    status.textContent = 'Uploading…';
+    status.className = '';
+
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        progressFill.style.width = Math.round((e.loaded / e.total) * 100) + '%';
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      uploadBtn.disabled = false;
+      progressFill.style.width = '100%';
+      if (xhr.status === 200) {
+        status.textContent = xhr.responseText;
+        status.className = 'ok';
+        pendingFiles = [];
+        renderList();
+      } else {
+        status.textContent = 'Error: ' + xhr.responseText;
+        status.className = 'error';
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      uploadBtn.disabled = false;
+      status.textContent = 'Network error';
+      status.className = 'error';
+    });
+
+    xhr.send(fd);
+  });
+
+  function humanSize(b) {
+    if (b < 1024) return b + ' B';
+    const u = ['KiB','MiB','GiB','TiB'];
+    let i = -1;
+    do { b /= 1024; i++; } while (b >= 1024 && i < u.length - 1);
+    return b.toFixed(1) + ' ' + u[i];
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+})();
+</script>
+</body>
+</html>
