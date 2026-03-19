@@ -151,6 +151,20 @@ curl -k -F "files=@firmware.bin" https://192.168.1.42:8000/upload  # self-signed
 
 The self-signed cert includes your detected LAN IP as a Subject Alternative Name, so modern browsers will show a matchable warning rather than a generic name mismatch error. This matters when testing new browser versions that enforce strict TLS validation.
 
+**Firewall** — On Fedora/RHEL/CentOS systems with `firewalld`, the `--open-firewall` flag auto-detects your local subnet (e.g. `192.168.1.0/24`) and adds a scoped rich rule so other devices on the LAN can connect. The rule is automatically removed on Ctrl+C / SIGTERM — no stale holes left behind:
+
+```bash
+# Just works — detects subnet, opens port, cleans up on exit
+./goserve -tls -open-firewall
+
+# What it does under the hood:
+# firewall-cmd --add-rich-rule='rule family="ipv4" source address="192.168.1.0/24" port port="8000" protocol="tcp" accept'
+# ... on exit:
+# firewall-cmd --remove-rich-rule='...'
+```
+
+If `firewall-cmd` isn't found or firewalld isn't running, it prints a warning and continues — the flag is a no-op on systems without firewalld.
+
 **Safety defaults:**
 
 - Uploaded files never overwrite existing ones (timestamp suffix appended on collision)
@@ -168,6 +182,7 @@ The self-signed cert includes your detected LAN IP as a Subject Alternative Name
 | `-tls` | `false` | Enable HTTPS |
 | `-cert` | | Path to TLS certificate file (PEM). Requires `-key`. |
 | `-key` | | Path to TLS private key file (PEM). Requires `-cert`. |
+| `-open-firewall` | `false` | Auto-open firewalld for local subnet, cleaned up on Ctrl+C |
 
 ## Project structure
 
@@ -210,7 +225,7 @@ curl -F "files=@a.txt" -F "files=@b.txt" http://host:8000/upload
 **Quick alias for your shell:**
 
 ```bash
-alias serve='goserve -tls'
+alias serve='goserve -tls -open-firewall'
 ```
 
 ## Comparison
@@ -221,6 +236,7 @@ alias serve='goserve -tls'
 | Directory listing | Yes | Requires config (+ possible recompile) | Yes |
 | File upload | No | Requires DAV module or proxy | Yes (web UI + curl) |
 | TLS | No | Yes (config required) | Yes (`-tls` flag) |
+| Firewall handling | Manual | Manual | Auto (`-open-firewall`) |
 | Concurrent connections | Fragile | Excellent | Excellent |
 | Broken pipe handling | Crashes/hangs | Clean | Clean |
 | Single binary | No (needs Python) | No (needs config + libs) | Yes |

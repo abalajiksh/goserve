@@ -18,8 +18,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -35,6 +38,7 @@ func main() {
 	tlsEnabled := flag.Bool("tls", false, "enable HTTPS (auto-generates self-signed cert if --cert/--key not given)")
 	certFile := flag.String("cert", "", "path to TLS certificate file (PEM)")
 	keyFile := flag.String("key", "", "path to TLS private key file (PEM)")
+	openFirewall := flag.Bool("open-firewall", false, "auto-open firewalld for local subnet (requires firewall-cmd, cleaned up on exit)")
 	flag.Parse()
 
 	serveDir, err := filepath.Abs(*dir)
@@ -101,7 +105,33 @@ func main() {
 		log.Printf("│  LAN   : %s://%-26s│\n", scheme, fmt.Sprintf("%s:%d", localIP, *port))
 	}
 	log.Printf("│  Upload: %s://%-26s│\n", scheme, fmt.Sprintf("%s:%d/upload", localIP, *port))
+	if *openFirewall {
+		log.Printf("│  Firewall: auto-open (subnet)                │\n")
+	}
 	log.Println("└─────────────────────────────────────────────┘")
+
+	// Firewall management
+	var firewallCleanup func()
+	if *openFirewall {
+		cleanup, err := openFirewalld(*port, localIP)
+		if err != nil {
+			log.Printf("  ⚠ firewall: %v", err)
+		} else {
+			firewallCleanup = cleanup
+		}
+	}
+
+	// Signal handling for graceful cleanup
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("\n  Caught %s, shutting down…", sig)
+		if firewallCleanup != nil {
+			firewallCleanup()
+		}
+		os.Exit(0)
+	}()
 
 	server := &http.Server{
 		Addr:         addr,
@@ -228,6 +258,86 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		log.Printf("  %s %s %s [%v]", r.RemoteAddr, r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
 	})
+}
+
+// getLocalSubnet returns the CIDR notation for the local network interface
+// that owns the given IP (e.g. "192.168.1.0/24").
+func getLocalSubnet(localIP string) (string, error) {
+	targetIP := net.ParseIP(localIP)
+	if targetIP == nil {
+		return "", fmt.Errorf("invalid IP: %s", localIP)
+	}
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ipNet.IP.Equal(targetIP) {
+				// Mask the IP to get the network address
+				network := ipNet.IP.Mask(ipNet.Mask)
+				ones, _ := ipNet.Mask.Size()
+				return fmt.Sprintf("%s/%d", network, ones), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no interface found for %s", localIP)
+}
+
+// openFirewalld adds a firewalld rich rule scoped to the local subnet.
+// Returns a cleanup function that removes the rule.
+func openFirewalld(port int, localIP string) (func(), error) {
+	// Check if firewall-cmd exists
+	fwCmd, err := exec.LookPath("firewall-cmd")
+	if err != nil {
+		return nil, fmt.Errorf("firewall-cmd not found (not using firewalld?)")
+	}
+
+	// Check if firewalld is running
+	check := exec.Command(fwCmd, "--state")
+	if out, err := check.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("firewalld not running: %s", strings.TrimSpace(string(out)))
+	}
+
+	subnet, err := getLocalSubnet(localIP)
+	if err != nil {
+		return nil, fmt.Errorf("detect subnet: %w", err)
+	}
+
+	richRule := fmt.Sprintf(
+		`rule family="ipv4" source address="%s" port port="%d" protocol="tcp" accept`,
+		subnet, port,
+	)
+
+	// Add the rule
+	add := exec.Command(fwCmd, "--add-rich-rule", richRule)
+	if out, err := add.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("add rule: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+
+	log.Printf("  🔓 firewall: opened port %d for %s", port, subnet)
+
+	cleanup := func() {
+		rm := exec.Command(fwCmd, "--remove-rich-rule", richRule)
+		if out, err := rm.CombinedOutput(); err != nil {
+			log.Printf("  ⚠ firewall cleanup failed: %s (%v)", strings.TrimSpace(string(out)), err)
+		} else {
+			log.Printf("  🔒 firewall: closed port %d for %s", port, subnet)
+		}
+	}
+
+	return cleanup, nil
 }
 
 func generateSelfSignedTLS(localIP string) (*tls.Config, error) {
