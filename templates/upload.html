@@ -44,7 +44,7 @@
   }
 
   .drop-zone p { font-size: 0.95rem; color: #71717a; margin-bottom: 1rem; }
-  .drop-zone .hint { font-size: 0.8rem; color: #52525b; }
+  .drop-zone .hint { font-size: 0.8rem; color: #52525b; margin-top: 1rem; }
 
   .browse-btn {
     display: inline-block;
@@ -150,7 +150,7 @@
   <p>Drag &amp; drop files here</p>
   <button class="browse-btn" id="browse-btn">Browse files</button>
   <input type="file" id="file-input" multiple>
-  <p class="hint">Multi-file supported · 2 GB max</p>
+  <p class="hint">Multi-file supported · {{.MaxUpload}} max</p>
 </div>
 
 <div id="file-list"></div>

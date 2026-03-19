@@ -31,6 +31,12 @@ var templateFS embed.FS
 
 var uploadTmpl *template.Template
 
+// Set at build time via ldflags
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
 	port := flag.Int("port", 8000, "port to listen on")
 	dir := flag.String("dir", ".", "directory to serve")
@@ -39,7 +45,16 @@ func main() {
 	certFile := flag.String("cert", "", "path to TLS certificate file (PEM)")
 	keyFile := flag.String("key", "", "path to TLS private key file (PEM)")
 	openFirewall := flag.Bool("open-firewall", false, "auto-open firewalld for local subnet (requires firewall-cmd, cleaned up on exit)")
+	maxUploadMB := flag.Int("max-upload", 2048, "maximum upload size in MB (default: 2048 = 2 GB)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("goserve %s (commit: %s)\n", version, commit)
+		os.Exit(0)
+	}
+
+	maxUploadBytes := int64(*maxUploadMB) << 20
 
 	serveDir, err := filepath.Abs(*dir)
 	if err != nil {
@@ -61,15 +76,18 @@ func main() {
 
 	uploadTmpl = template.Must(template.ParseFS(templateFS, "templates/upload.html"))
 
+	// Human-readable upload limit for the HTML template
+	maxUploadLabel := humanSize(maxUploadBytes)
+
 	mux := http.NewServeMux()
 
 	// Upload endpoint — serves form on GET, handles upload on POST
 	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			handleUploadPage(w, r)
+			handleUploadPage(w, r, maxUploadLabel)
 		case http.MethodPost:
-			handleUpload(w, r, uplDir)
+			handleUpload(w, r, uplDir, maxUploadBytes)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -88,10 +106,11 @@ func main() {
 	}
 
 	log.Println("┌─────────────────────────────────────────────┐")
-	log.Printf("│  goserve                                    │")
+	log.Printf("│  goserve %-35s│\n", version+" ("+commit+")")
 	log.Println("├─────────────────────────────────────────────┤")
 	log.Printf("│  Serving   : %-30s│\n", serveDir)
 	log.Printf("│  Uploads to: %-30s│\n", uplDir)
+	log.Printf("│  Max upload: %-30s│\n", maxUploadLabel)
 	if *tlsEnabled {
 		if *certFile != "" {
 			log.Printf("│  TLS       : custom cert                    │\n")
@@ -163,14 +182,15 @@ func main() {
 	}
 }
 
-func handleUploadPage(w http.ResponseWriter, r *http.Request) {
+func handleUploadPage(w http.ResponseWriter, r *http.Request, maxUploadLabel string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	uploadTmpl.Execute(w, nil)
+	uploadTmpl.Execute(w, map[string]string{
+		"MaxUpload": maxUploadLabel,
+	})
 }
 
-func handleUpload(w http.ResponseWriter, r *http.Request, uplDir string) {
-	// 2 GB max
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<30)
+func handleUpload(w http.ResponseWriter, r *http.Request, uplDir string, maxBytes int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
 		http.Error(w, fmt.Sprintf("parse error: %v", err), http.StatusBadRequest)

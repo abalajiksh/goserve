@@ -80,19 +80,31 @@ cd goserve
 go build -o goserve .
 ```
 
+Version and commit ID can be injected at build time via ldflags:
+
+```bash
+go build -ldflags "-X main.version=1.0.0 -X main.commit=$(git rev-parse --short HEAD)" -o goserve .
+```
+
+Running `./goserve -version` will then print `goserve 1.0.0 (commit: abc1234)`. Without ldflags, it defaults to `dev (commit: unknown)`.
+
 The binary is fully self-contained — the HTML upload page is embedded at compile time via `//go:embed`. Copy it anywhere.
 
 **Cross-compile for another machine:**
 
 ```bash
+VERSION=1.0.0
+COMMIT=$(git rev-parse --short HEAD)
+LDFLAGS="-X main.version=$VERSION -X main.commit=$COMMIT"
+
 # For a Raspberry Pi
-GOOS=linux GOARCH=arm64 go build -o goserve-arm64 .
+GOOS=linux GOARCH=arm64 go build -ldflags "$LDFLAGS" -o goserve-arm64 .
 
 # For a colleague's Mac
-GOOS=darwin GOARCH=arm64 go build -o goserve-macos .
+GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o goserve-macos .
 
 # Windows
-GOOS=windows GOARCH=amd64 go build -o goserve.exe .
+GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o goserve.exe .
 ```
 
 ## Usage
@@ -107,11 +119,18 @@ GOOS=windows GOARCH=amd64 go build -o goserve.exe .
 # Custom upload destination
 ./goserve -uploads /tmp/incoming
 
+# Set a custom upload limit (in MB, default 2048 = 2 GB)
+./goserve -max-upload 4096    # 4 GB
+./goserve -max-upload 512     # 512 MB
+
 # HTTPS with auto-generated self-signed certificate
 ./goserve -tls
 
 # HTTPS with your own certificate (mkcert, Let's Encrypt, office CA, etc.)
 ./goserve -tls -cert server.crt -key server.key
+
+# Print version and exit
+./goserve -version
 ```
 
 On startup, goserve prints your LAN address so you can reach it from other devices immediately:
@@ -183,6 +202,8 @@ If `firewall-cmd` isn't found or firewalld isn't running, it prints a warning an
 | `-cert` | | Path to TLS certificate file (PEM). Requires `-key`. |
 | `-key` | | Path to TLS private key file (PEM). Requires `-cert`. |
 | `-open-firewall` | `false` | Auto-open firewalld for local subnet, cleaned up on Ctrl+C |
+| `-max-upload` | `2048` | Maximum upload size in MB |
+| `-version` | | Print version and exit |
 
 ## Project structure
 
